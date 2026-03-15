@@ -103,6 +103,7 @@ pub enum Lang {
     Lean,
     Lisp,
     Lua,
+    Matlab,
     Make,
     Makefile,
     Markdown,
@@ -235,6 +236,7 @@ impl Lang {
             Lean => "Lean",
             Lisp => "Lisp",
             Lua => "Lua",
+            Matlab => "MATLAB",
             Make => "Make",
             Makefile => "Makefile",
             Markdown => "Markdown",
@@ -386,7 +388,7 @@ pub fn lang_from_ext(filepath: &str) -> Lang {
         "lean" | "hlean" => Lean,
         "less" => Less,
         "lua" => Lua,
-        "m" => ObjectiveC,
+        "m" => check_matlab_or_objectivec(path),
         "ml" | "mli" => OCaml,
         "nb" | "wl" => Wolfram,
         "sh" => BourneShell,
@@ -502,6 +504,7 @@ pub fn counter_config_for_lang<'a>(lang: Lang) -> (SmallVec<[&'a str; 3]>, Small
         Lisp         => (smallvec![";"], smallvec![("#|", "|#")]),
         Lean         => (smallvec!["--"], smallvec![("/-", "-/")]),
         Lua          => (smallvec!["--"], smallvec![("--[[", "]]")]),
+        Matlab       => (smallvec!["%"], smallvec![("%{", "%}")]),
         // which one is right? = or =pod?
         // Perl => SM("#""=", "=cut"),
         Perl   => (smallvec!["#"], smallvec![("=pod", "=cut")]),
@@ -826,5 +829,60 @@ fn check_coq_or_verilog(path: &Path) -> Lang {
         Coq
     } else {
         Verilog  // Default to Verilog if equal or Verilog has more
+    }
+}
+
+// Distinguishes between MATLAB and Objective-C for .m files by checking content
+fn check_matlab_or_objectivec(path: &Path) -> Lang {
+    let mfile = File::open(path);
+    let mut file = match mfile {
+        Ok(file) => file,
+        Err(_) => return ObjectiveC, // Preserve historical default on read errors
+    };
+
+    let mut bytes = vec![];
+    // Read up to 8KB to classify based on language-specific markers
+    let mut handle = file.take(8192);
+    let _ = handle.read_to_end(&mut bytes);
+
+    let s = match std::str::from_utf8(&bytes) {
+        Ok(x) => x,
+        Err(_) => return ObjectiveC,
+    };
+
+    let mut matlab_score = 0;
+    let mut objc_score = 0;
+
+    for line in s.lines() {
+        let l = line.trim_start();
+
+        if l.starts_with("%") || l.starts_with("%{") || l.starts_with("%}") {
+            matlab_score += 3;
+        }
+
+        if l.starts_with("function ") {
+            matlab_score += 3;
+        }
+
+        if l.starts_with("#import")
+            || l.starts_with("@interface")
+            || l.starts_with("@implementation")
+            || l.starts_with("@protocol")
+            || l.starts_with("@property")
+            || l.starts_with("@synthesize")
+            || l.starts_with("@autoreleasepool")
+        {
+            objc_score += 3;
+        }
+
+        if l.contains("NSLog(") || l.contains("<Foundation/Foundation.h>") {
+            objc_score += 2;
+        }
+    }
+
+    if matlab_score > objc_score {
+        Matlab
+    } else {
+        ObjectiveC
     }
 }
